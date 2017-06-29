@@ -18,15 +18,17 @@ package org.springframework.security.oauth2.provider.token.store.jwk;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
+import org.apache.commons.codec.binary.Base64;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.util.StringUtils;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.Map;
-import java.util.Set;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.util.*;
 
 import static org.springframework.security.oauth2.provider.token.store.jwk.JwkAttributes.*;
 
@@ -78,17 +80,21 @@ class JwkSetConverter implements Converter<InputStream, Set<JwkDefinition>> {
 			}
 
 			jwkDefinitions = new LinkedHashSet<JwkDefinition>();
-			Map<String, String> attributes = new HashMap<String, String>();
+			Map<String, JwkMemberValue> attributes = new HashMap<String, JwkMemberValue>();
 
 			while (parser.nextToken() == JsonToken.START_OBJECT) {
 				while (parser.nextToken() == JsonToken.FIELD_NAME) {
 					String attributeName = parser.getCurrentName();
 					// gh-1082 - skip arrays such as x5c as we can't deal with them yet
 					if (parser.nextToken() == JsonToken.START_ARRAY) {
+						List<String> valueArray = new ArrayList<>();
 						while (parser.nextToken() != JsonToken.END_ARRAY) {
+							valueArray.add(parser.getValueAsString());
 						}
+						JwkMemberValue memberValue = new JwkMemberValue(valueArray);
+						attributes.put(attributeName, memberValue);
 					} else {
-						attributes.put(attributeName, parser.getValueAsString());
+						attributes.put(attributeName, new JwkMemberValue(parser.getValueAsString()));
 					}
 				}
 				JwkDefinition jwkDefinition = this.createJwkDefinition(attributes);
@@ -117,9 +123,9 @@ class JwkSetConverter implements Converter<InputStream, Set<JwkDefinition>> {
 	 * @return a {@link JwkDefinition}
 	 * @throws JwkException if the Key Type (&quot;kty&quot;) attribute value is not {@link JwkDefinition.KeyType#RSA}
 	 */
-	private JwkDefinition createJwkDefinition(Map<String, String> attributes) {
+	private JwkDefinition createJwkDefinition(Map<String, JwkMemberValue> attributes) {
 		JwkDefinition.KeyType keyType =
-				JwkDefinition.KeyType.fromValue(attributes.get(KEY_TYPE));
+				JwkDefinition.KeyType.fromValue(attributes.get(KEY_TYPE).getStringValue());
 
 		if (!JwkDefinition.KeyType.RSA.equals(keyType)) {
 			throw new JwkException((keyType != null ? keyType.value() : "unknown") +
@@ -137,16 +143,33 @@ class JwkSetConverter implements Converter<InputStream, Set<JwkDefinition>> {
 	 * @return a {@link JwkDefinition} representation of a RSA Key
 	 * @throws JwkException if at least one attribute value is missing or invalid for a RSA Key
 	 */
-	private JwkDefinition createRsaJwkDefinition(Map<String, String> attributes) {
+	private JwkDefinition createRsaJwkDefinition(Map<String, JwkMemberValue> attributes) {
 		// kid
-		String keyId = attributes.get(KEY_ID);
+		String keyId = attributes.get(KEY_ID).getStringValue();
 		if (!StringUtils.hasText(keyId)) {
 			throw new JwkException(KEY_ID + " is a required attribute for a JWK.");
 		}
 
+		// x5c
+		List<String> certificateChain = attributes.get(X509_CERTIFICATE_CHAIN).getArrayValue();
+		if(!certificateChain.isEmpty()) {
+			CertificateFactory certFactory;
+			try {
+				certFactory = CertificateFactory.getInstance("X.509");
+				for (String certificate : certificateChain) {
+					byte[] decodedCert = Base64.decodeBase64(certificate);
+					X509Certificate x509Certificate = (X509Certificate) certFactory.generateCertificate(new ByteArrayInputStream(decodedCert));
+					x509Certificate.getKeyUsage()
+				}
+			} catch (CertificateException e) {
+				// this exception should not be thrown since every JVM should implement X.509
+				throw new JwkException("X.509 certificate is currently not supported.");
+			}
+		}
+
 		// use
 		JwkDefinition.PublicKeyUse publicKeyUse =
-				JwkDefinition.PublicKeyUse.fromValue(attributes.get(PUBLIC_KEY_USE));
+				JwkDefinition.PublicKeyUse.fromValue(attributes.get(PUBLIC_KEY_USE).getStringValue());
 		if (!JwkDefinition.PublicKeyUse.SIG.equals(publicKeyUse)) {
 			throw new JwkException((publicKeyUse != null ? publicKeyUse.value() : "unknown") +
 					" (" + PUBLIC_KEY_USE + ") is currently not supported.");
@@ -154,25 +177,26 @@ class JwkSetConverter implements Converter<InputStream, Set<JwkDefinition>> {
 
 		// alg
 		JwkDefinition.CryptoAlgorithm algorithm =
-				JwkDefinition.CryptoAlgorithm.fromHeaderParamValue(attributes.get(ALGORITHM));
-		if (!JwkDefinition.CryptoAlgorithm.RS256.equals(algorithm) &&
+				JwkDefinition.CryptoAlgorithm.fromHeaderParamValue(attributes.get(ALGORITHM).getStringValue());
+		if (algorithm != null &&
+				!JwkDefinition.CryptoAlgorithm.RS256.equals(algorithm) &&
 				!JwkDefinition.CryptoAlgorithm.RS384.equals(algorithm) &&
 				!JwkDefinition.CryptoAlgorithm.RS512.equals(algorithm)) {
-			throw new JwkException((algorithm != null ? algorithm.standardName() : "unknown") +
-					" (" + ALGORITHM + ") is currently not supported.");
+			throw new JwkException(algorithm.standardName() + " (" + ALGORITHM + ") is currently not supported.");
 		}
 
 		// n
-		String modulus = attributes.get(RSA_PUBLIC_KEY_MODULUS);
+		String modulus = attributes.get(RSA_PUBLIC_KEY_MODULUS).getStringValue();
 		if (!StringUtils.hasText(modulus)) {
 			throw new JwkException(RSA_PUBLIC_KEY_MODULUS + " is a required attribute for a RSA JWK.");
 		}
 
 		// e
-		String exponent = attributes.get(RSA_PUBLIC_KEY_EXPONENT);
+		String exponent = attributes.get(RSA_PUBLIC_KEY_EXPONENT).getStringValue();
 		if (!StringUtils.hasText(exponent)) {
 			throw new JwkException(RSA_PUBLIC_KEY_EXPONENT + " is a required attribute for a RSA JWK.");
 		}
+
 
 		RsaJwkDefinition jwkDefinition = new RsaJwkDefinition(
 				keyId, publicKeyUse, algorithm, modulus, exponent);

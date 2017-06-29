@@ -157,13 +157,18 @@ public class JwkSetConverterTest {
 	}
 
 	@Test
-	public void convertWhenJwkSetStreamHasJwkElementWithMissingAlgorithmAttributeThenThrowJwkException() throws Exception {
+	public void convertWhenJwkSetStreamHasJwkElementWithMissingAlgorithmAttributeAndMissingX5cAttributeThenThrowJwkException() throws Exception {
 		this.thrown.expect(JwkException.class);
 		this.thrown.expectMessage("unknown (alg) is currently not supported.");
 		Map<String, Object> jwkSetObject = new HashMap<String, Object>();
 		Map<String, Object> jwkObject = this.createJwkObject(JwkDefinition.KeyType.RSA, "key-id-1", JwkDefinition.PublicKeyUse.SIG);
 		jwkSetObject.put(JwkAttributes.KEYS, new Map[] {jwkObject});
 		this.converter.convert(this.asInputStream(jwkSetObject));
+	}
+
+	@Test
+	public void convertWhenJwkSetStreamHasX5cElement() throws Exception {
+
 	}
 
 	@Test
