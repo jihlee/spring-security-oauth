@@ -22,12 +22,16 @@ import org.apache.commons.codec.binary.Base64;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.util.StringUtils;
 
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.security.cert.CertificateException;
-import java.security.cert.CertificateFactory;
-import java.security.cert.X509Certificate;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.*;
 import java.util.*;
 
 import static org.springframework.security.oauth2.provider.token.store.jwk.JwkAttributes.*;
@@ -150,20 +154,50 @@ class JwkSetConverter implements Converter<InputStream, Set<JwkDefinition>> {
 			throw new JwkException(KEY_ID + " is a required attribute for a JWK.");
 		}
 
+		JwkDefinition.PublicKeyUse publicKeyUseFromX5c;
+		JwkDefinition.CryptoAlgorithm algorithmFromX5c;
+
 		// x5c
 		List<String> certificateChain = attributes.get(X509_CERTIFICATE_CHAIN).getArrayValue();
 		if(!certificateChain.isEmpty()) {
-			CertificateFactory certFactory;
 			try {
-				certFactory = CertificateFactory.getInstance("X.509");
+				CertificateFactory certFactory = CertificateFactory.getInstance("X.509");
+				List<X509Certificate> x509CertificateChain = new ArrayList<X509Certificate>();
 				for (String certificate : certificateChain) {
 					byte[] decodedCert = Base64.decodeBase64(certificate);
 					X509Certificate x509Certificate = (X509Certificate) certFactory.generateCertificate(new ByteArrayInputStream(decodedCert));
-					x509Certificate.getKeyUsage()
+					x509CertificateChain.add(x509Certificate);
 				}
+				CertPath certPath = certFactory.generateCertPath(x509CertificateChain);
+				CertPathValidator certPathValidator = CertPathValidator.getInstance("PKIX");
+
+				KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
+
+				TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance("PKIX");
+				trustManagerFactory.init();
+				trustManagerFactory.getTrustManagers()
+				X509TrustManager trustManager = X509
+
+				certPathValidator.validate(certPath, )
+
+				String mainCertficate = certificateChain.get(0);
+				byte[] decodedCert = Base64.decodeBase64(mainCertficate);
+				X509Certificate mainX509Certificate = (X509Certificate) certFactory.generateCertificate(new ByteArrayInputStream(decodedCert));
+				publicKeyUseFromX5c = mainX509Certificate.getKeyUsage()
+
+
 			} catch (CertificateException e) {
-				// this exception should not be thrown since every JVM should implement X.509
+				// this exception should not be thrown since every Java Platform should implement X.509.
 				throw new JwkException("X.509 certificate is currently not supported.");
+			} catch (NoSuchAlgorithmException e) {
+				// this exception should not be thrown since every Java Platform should implement PKIX algorithm.
+				throw new JwkException("PKIX algorithm is currenly not supported.");
+			} catch (CertPathValidatorException e) {
+				e.printStackTrace();
+			} catch (KeyStoreException e) {
+				e.printStackTrace();
+			} catch (InvalidAlgorithmParameterException e) {
+				e.printStackTrace();
 			}
 		}
 
